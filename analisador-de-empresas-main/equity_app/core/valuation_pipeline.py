@@ -384,13 +384,18 @@ def run_valuation(
         out.monte_carlo_error = "Monte Carlo skipped (toggle to enable)."
 
     # ---- DDM ----
-    if ddm_is_applicable(cash, income):
+    # Pass the pipeline-resolved share count so the per-share dividend
+    # floor in is_applicable AND the DPS calc in two_stage both work
+    # for thin-XBRL filers (V, MA, …) whose income/balance frames
+    # don't expose a share series.
+    if ddm_is_applicable(cash, income, shares_outstanding=shares):
         try:
             out.ddm = ddm_two_stage(
                 income=income, balance=balance, cash=cash,
                 cost_of_equity=wacc_res.cost_of_equity,
                 stage1_years=assumptions.stage1_years,
                 terminal_growth=assumptions.terminal_growth,
+                shares_outstanding=shares,
             )
         except (ValuationError, InsufficientDataError) as exc:
             out.ddm_error = str(exc)
