@@ -768,6 +768,26 @@ if _have_agg:
                 )
             st.caption(_decomp_caption)
 
+    # ---- Foreign-listing caption (currency / ADR ratio caveat) ----
+    # Non-US filers report in their local currency (NVO in DKK, SAP in
+    # EUR, …) and ADRs trade at varying ratios to ordinary shares
+    # (TSM ADR = 5 ordinary). The DCF math doesn't compensate for
+    # either yet — surface the caveat so users see NVO $699 vs price
+    # $46 and understand the gap is a data-layer issue, not a model
+    # signal.
+    _country = ((live_info or {}).get("country")
+                or (live_info or {}).get("Country")
+                or (live_info or {}).get("countryName")
+                or "").strip()
+    _US_VARIANTS = ("United States", "USA", "US", "U.S.", "U.S.A.")
+    if _country and _country not in _US_VARIANTS:
+        st.caption(
+            f"⚠ Foreign listing ({_country}) — intrinsic valuation may "
+            "not reflect currency conversion or ADR share-ratio "
+            "adjustments. Financials, ratios, and peer comparison are "
+            "unaffected. Currency normalization is on the roadmap."
+        )
+
     # ---- Diagnostic captions: clipped + normalization signal + skipped ----
     _cap_lines: list[str] = []
     if _agg.clipped_models:
