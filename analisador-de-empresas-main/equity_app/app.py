@@ -44,6 +44,7 @@ pages = [
     st.Page(str(PAGES_DIR / "2_📈_Portfolio.py"),           title="Portfolio"),
     st.Page(str(PAGES_DIR / "3_⚖_Compare.py"),             title="Compare"),
     st.Page(str(PAGES_DIR / "4_📓_Journal.py"),             title="Journal"),
+    st.Page(str(PAGES_DIR / "5_📰_News.py"),                title="News"),
     st.Page(str(PAGES_DIR / "9_🔧_Health.py"),              title="Health"),
 ]
 
