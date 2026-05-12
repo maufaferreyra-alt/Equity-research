@@ -30,7 +30,7 @@ the new fundamentals-driven path runs.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 import numpy as np
 import pandas as pd
@@ -38,6 +38,12 @@ import pandas as pd
 from analysis.ratios import _get
 from core.constants import DCF_DEFAULTS
 from core.exceptions import InsufficientDataError, ValuationError
+
+if TYPE_CHECKING:
+    # Late-bind to avoid circular imports — these modules import nothing
+    # from us, but listing them at top-level would couple module loading.
+    from analysis.koller_reorg import ReorganizedFinancials
+    from valuation.fundamental_growth import FundamentalGrowth
 
 
 FadeCurve = Literal["linear", "logistic"]
@@ -221,6 +227,14 @@ def run_dcf(
     ticker: Optional[str] = None,
     sector: Optional[str] = None,
     risk_free_rate: float = 0.04,
+    # ---- Precomputed invariants (perf hoist for Monte Carlo / pipeline) ----
+    # These three quantities depend only on the financial statements, not on
+    # WACC/growth perturbations. Callers running many DCFs over the same
+    # statements (Monte Carlo, sensitivity) should compute them ONCE and
+    # pass them in — avoids ~43ms/call of redundant pandas work.
+    reorg: Optional[ReorganizedFinancials] = None,
+    lifecycle: Optional[dict] = None,
+    growth: Optional[FundamentalGrowth] = None,
     # ---- Legacy kwargs (override the Damodaran defaults when provided) ----
     stage1_growth: Optional[float] = None,
     stage1_years: Optional[int] = None,
@@ -261,19 +275,24 @@ def run_dcf(
                 lifecycle_stage=profile,
             )
 
-    # ---- B) Reorganize + classify + growth ----
-    try:
-        reorg = reorganize(income, balance, cash, wacc=wacc)
-    except ValueError as exc:
-        return _skipped(f"Cannot reorganize statements: {exc}", wacc=wacc)
+    # ---- B) Reorganize + classify + growth (use caller-provided when present) ----
+    # Monte Carlo / sensitivity callers pass these in to avoid recomputing
+    # them ~1000 times — they depend only on the statements, not WACC/g.
+    if reorg is None:
+        try:
+            reorg = reorganize(income, balance, cash, wacc=wacc)
+        except ValueError as exc:
+            return _skipped(f"Cannot reorganize statements: {exc}", wacc=wacc)
 
-    lifecycle = classify_lifecycle(income, cash, ticker=ticker or "", sector=sector)
+    if lifecycle is None:
+        lifecycle = classify_lifecycle(income, cash, ticker=ticker or "", sector=sector)
     stage = lifecycle["stage"]
 
-    growth = estimate_fundamental_growth(
-        reorg, income, balance,
-        stage=stage, risk_free_rate=risk_free_rate, cash=cash,
-    )
+    if growth is None:
+        growth = estimate_fundamental_growth(
+            reorg, income, balance,
+            stage=stage, risk_free_rate=risk_free_rate, cash=cash,
+        )
 
     # ---- C) Forecast horizon per stage (overridable) ----
     default_horizons = {

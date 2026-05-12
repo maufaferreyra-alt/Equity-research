@@ -292,6 +292,7 @@ def run_valuation(
     # ---- Reorganization + lifecycle + fundamental growth (shared by DCF/EPV/Multiples) ----
     reorg: Optional[ReorganizedFinancials] = None
     growth: Optional[FundamentalGrowth] = None
+    lifecycle: Optional[dict] = None
     stage: str = "default"
     try:
         reorg = reorganize(income, balance, cash, wacc=wacc_res.wacc)
@@ -321,6 +322,10 @@ def run_valuation(
                 shares_outstanding=shares,
                 ticker=ticker, sector=sector,
                 risk_free_rate=assumptions.risk_free,
+                # Reuse the pipeline-level reorg/lifecycle/growth (perf)
+                reorg=reorg,
+                lifecycle=lifecycle,
+                growth=growth,
                 stage1_growth=g_override,
                 stage1_years=assumptions.stage1_years,
                 stage2_years=assumptions.stage2_years,
@@ -365,6 +370,11 @@ def run_valuation(
                 growth_std=assumptions.mc_rev_growth_std,
                 current_price=current_price,
                 seed=mc_seed,
+                # Enable MC's invariants hoist (and the DCF skip-gate
+                # for banks/insurance/reits) by passing the same context
+                # the main DCF run got.
+                ticker=ticker, sector=sector,
+                risk_free_rate=assumptions.risk_free,
             )
         except (ValuationError, InsufficientDataError) as exc:
             out.monte_carlo_error = str(exc)
