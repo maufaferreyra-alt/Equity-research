@@ -390,3 +390,165 @@ def fetch_market_news(
         it.relevance_score = _score_relevance(it, query_ticker=None)
     all_items.sort(key=lambda x: x.relevance_score, reverse=True)
     return all_items[:max_items]
+
+
+# ============================================================
+# Smart search — ticker / company / theme dispatcher
+# ============================================================
+@dataclass
+class SearchResult:
+    """Search outcome — distinguishes ticker match vs theme search."""
+    matched_ticker: Optional[str] = None    # 'META' if keyword resolved
+    matched_name: Optional[str] = None      # 'Meta Platforms, Inc.'
+    items: list = field(default_factory=list)
+    is_theme: bool = False                  # True if query treated as theme
+
+
+def _resolve_query(query: str) -> Optional[tuple[str, str]]:
+    """Try to resolve a keyword query to (ticker, name) via yfinance.Search.
+
+    Returns ``(ticker, name)`` only when the top quote looks like a clean
+    primary listing — single ticker, no derivative/ETF/crypto suffixes —
+    and the name shares at least one word with the query (a sanity check
+    that the match isn't spurious). Returns ``None`` otherwise, signalling
+    the caller should fall back to theme search."""
+    try:
+        import yfinance as yf
+        s = yf.Search(query, max_results=5, news_count=0)
+        if not s.quotes:
+            return None
+        top = s.quotes[0]
+        symbol = top.get("symbol", "")
+        name = top.get("longname") or top.get("shortname", "")
+        # Reject derivatives / foreign listings / crypto / FX
+        if "." in symbol or "-" in symbol or len(symbol) > 5:
+            return None
+        if not symbol.replace("-", "").isalpha():
+            return None
+        # Sanity: name should share a word with query. Strip
+        # punctuation when tokenizing so "Tesla, Inc." tokenizes to
+        # {"tesla", "inc"} (catches the comma) — otherwise the obvious
+        # match query="tesla" vs token "tesla," would be missed.
+        _punct_re = re.compile(r"[^\w]+")
+        query_words = set(_punct_re.sub(" ", query.lower()).split())
+        name_words = set(_punct_re.sub(" ", name.lower()).split())
+        if not query_words & name_words:
+            return None
+        return (symbol.upper(), name)
+    except Exception as e:
+        log.debug("yfinance.Search resolve failed: %s", e)
+        return None
+
+
+def _fetch_theme_news(
+    query: str, lookback_days: int = 7, max_items: int = 50,
+) -> list[NewsItem]:
+    """Fetch news for a free-text theme keyword via yfinance.Search.
+
+    yfinance.Search returns ranked news articles for any query — works
+    well for themes like 'AI', 'fed rates', 'recession' where there is
+    no specific ticker to attach. Items carry empty ``tickers`` list."""
+    try:
+        import yfinance as yf
+        s = yf.Search(query, max_results=0, news_count=max_items)
+        if not s.news:
+            return []
+        cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+        items: list[NewsItem] = []
+        for entry in s.news:
+            try:
+                ts = entry.get("providerPublishTime")
+                if isinstance(ts, (int, float)):
+                    published = datetime.fromtimestamp(ts, tz=timezone.utc)
+                else:
+                    continue
+                if published < cutoff:
+                    continue
+                title = str(entry.get("title") or "").strip()
+                url = str(entry.get("link") or "").strip()
+                if not title or not url:
+                    continue
+                src = str(entry.get("publisher") or "Yahoo Finance").strip() or "Yahoo Finance"
+                items.append(NewsItem(
+                    title=title,
+                    url=url,
+                    source=src,
+                    source_normalized=_normalize_source(src),
+                    published_at=published,
+                    tickers=[],
+                    provider="yfinance",
+                ))
+            except Exception:
+                continue
+        return items
+    except Exception as e:
+        log.warning("Theme news fetch failed for %r: %s", query, e)
+        return []
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def search_news(
+    query: str,
+    *,
+    lookback_days: int = 7,
+    max_items: int = 50,
+) -> SearchResult:
+    """Smart news search dispatcher.
+
+    Routes the query to one of three paths:
+      1. Direct ticker (uppercase short alphabetic input → ``fetch_news_for_ticker``)
+      2. Keyword that resolves to a ticker via yfinance.Search → per-ticker feed
+      3. Theme keyword (no clean ticker match) → ``_fetch_theme_news``
+
+    The ``SearchResult`` carries the routing decision so the UI can show
+    the resolved company name or indicate theme-only mode."""
+    query = query.strip()
+    if not query:
+        return SearchResult()
+
+    q_upper = query.upper()
+
+    # Path 1: input already looks like a ticker (short, all-letters)
+    if (q_upper == query and len(query) <= 5
+            and query.replace("-", "").replace(".", "").isalpha()):
+        items = fetch_news_for_ticker(
+            q_upper, lookback_days=lookback_days, max_items=max_items,
+        )
+        if items:
+            name = None
+            try:
+                import yfinance as yf
+                info = yf.Ticker(q_upper).info or {}
+                name = info.get("longName") or info.get("shortName")
+            except Exception:
+                pass
+            return SearchResult(
+                matched_ticker=q_upper, matched_name=name,
+                items=items, is_theme=False,
+            )
+
+    # Path 2: keyword → try resolve to ticker
+    resolved = _resolve_query(query)
+    if resolved:
+        ticker, name = resolved
+        items = fetch_news_for_ticker(
+            ticker, lookback_days=lookback_days, max_items=max_items,
+        )
+        return SearchResult(
+            matched_ticker=ticker, matched_name=name,
+            items=items, is_theme=False,
+        )
+
+    # Path 3: pure theme search
+    items = _fetch_theme_news(
+        query, lookback_days=lookback_days, max_items=max_items,
+    )
+    items = _enrich_sentiment(items)
+    items = _dedupe(items)
+    for it in items:
+        it.relevance_score = _score_relevance(it, query_ticker=None)
+    items.sort(key=lambda x: x.relevance_score, reverse=True)
+    return SearchResult(
+        matched_ticker=None, matched_name=None,
+        items=items, is_theme=True,
+    )

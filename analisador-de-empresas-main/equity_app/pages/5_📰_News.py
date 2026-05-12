@@ -14,12 +14,14 @@ st.markdown(
 # Search bar + clear
 col_search, col_clear = st.columns([6, 1])
 with col_search:
-    ticker_query = st.text_input(
-        "Search by ticker",
+    query = st.text_input(
+        "Search news",
         value="",
-        placeholder="e.g., AAPL, NVDA, WMT",
+        placeholder="Ticker, company name, or theme (e.g., AAPL, "
+                    "facebook, AI, fed rates, recession)",
         label_visibility="collapsed",
-    ).strip().upper()
+    ).strip()
+    # NOTE: no .upper() — preserve case for theme/name queries
 with col_clear:
     if st.button("Clear", use_container_width=True):
         st.rerun()
@@ -53,6 +55,7 @@ try:
     from analysis.news_aggregator import (
         fetch_news_for_ticker,
         fetch_market_news,
+        search_news,
     )
     from ui.components.news_card import render_news_card_with_modal
     _IMPORT_OK = True
@@ -86,29 +89,40 @@ def _render_news_grid(items, n_cols: int = 3):
 
 
 if _IMPORT_OK:
-    if ticker_query:
-        st.caption(
-            f"Showing news for **{ticker_query}** — sorted by relevance"
-        )
+    if query:
         try:
-            with st.spinner("Fetching news…"):
-                items = fetch_news_for_ticker(
-                    ticker_query,
+            with st.spinner("Searching news…"):
+                result = search_news(
+                    query,
                     lookback_days=lookback,
                     max_items=items_to_show,
                 )
         except Exception as e:
-            st.error(f"Failed to fetch news for {ticker_query}: {e}")
-            items = []
+            st.error(f"Search failed: {e}")
+            result = None
 
-        if not items:
+        if result and result.items:
+            if result.is_theme:
+                st.caption(
+                    f"Showing news matching **'{query}'** "
+                    f"(theme search) — sorted by relevance"
+                )
+            elif result.matched_name:
+                st.caption(
+                    f"Showing news for **{result.matched_name} "
+                    f"(${result.matched_ticker})** — sorted by relevance"
+                )
+            else:
+                st.caption(
+                    f"Showing news for **${result.matched_ticker}** — "
+                    f"sorted by relevance"
+                )
+            _render_news_grid(result.items)
+        elif result is not None:
             st.info(
-                f"No news found for {ticker_query} in the last "
-                f"{lookback} days. Try a different ticker or extend "
-                f"the time range."
+                f"No news found for '{query}' in the last {lookback} days. "
+                "Try a different keyword, ticker, or extend the time range."
             )
-        else:
-            _render_news_grid(items)
     else:
         st.caption("Top market news across major tickers — sorted by relevance")
         try:
