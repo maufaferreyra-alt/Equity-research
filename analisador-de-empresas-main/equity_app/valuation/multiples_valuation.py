@@ -175,8 +175,12 @@ def run_multiples_valuation(
     t = float(reorg.avg_tax_rate_3y) if np.isfinite(reorg.avg_tax_rate_3y) else 0.21
 
     roe = _smoothed_roe(income, balance)
-    if roe is None or roe < g + 0.01:
+    if roe is None or roe <= g + 0.01 or not np.isfinite(roe):
         # Fallback: floor at slightly above g so payout math is well-defined.
+        # `<=` (not `<`) catches the edge where _smoothed_roe clips a negative
+        # mean to exactly 0.0 (loss-making companies) and g_stable is -0.01
+        # (declining lifecycle) — then both sides equal 0 and the divisor
+        # `max(roe, g + 0.01)` below collapses to 0.0 → ZeroDivisionError.
         roe = max(g + 0.02, 0.08)
 
     # ---- Intrinsic P/E ----
