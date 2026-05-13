@@ -140,16 +140,20 @@ def get_holdings_snapshot(ticker: str) -> HoldingsSnapshot:
 
     try:
         t = yf.Ticker(ticker)
+        # yfinance properties do lazy network I/O on access — getattr
+        # default=None only catches AttributeError, not getter-raised
+        # exceptions (YFRateLimitError, timeouts, 401s). Keep these
+        # inside the try so a Yahoo throttle returns a graceful empty
+        # snapshot instead of crashing the page.
+        inst_df = _coerce_holders(getattr(t, "institutional_holders", None))
+        funds_df = _coerce_holders(getattr(t, "mutualfund_holders", None))
+        insider_pct, inst_pct = _parse_major_holders(getattr(t, "major_holders", None))
     except Exception as e:
         return HoldingsSnapshot(
             institutional=pd.DataFrame(),
             mutual_funds=pd.DataFrame(),
-            note=f"yfinance error: {e}",
+            note=f"yfinance error: {type(e).__name__}",
         )
-
-    inst_df = _coerce_holders(getattr(t, "institutional_holders", None))
-    funds_df = _coerce_holders(getattr(t, "mutualfund_holders", None))
-    insider_pct, inst_pct = _parse_major_holders(getattr(t, "major_holders", None))
 
     note = (
         ""
